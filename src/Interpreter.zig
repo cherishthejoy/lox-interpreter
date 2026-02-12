@@ -1,0 +1,180 @@
+const std = @import("std");
+const Parser = @import("Parser.zig");
+const Expr = Parser.Expr;
+const Literal = Parser.Literal;
+const Token = @import("Token.zig").Token;
+const Stmt = Parser.Stmt;
+
+const Environment = @import("Environment.zig").Environment;
+
+const runtimeError = @import("main.zig").runtimeError;
+
+pub const Interpreter = struct {
+    const Self = @This();
+
+    allocator: std.mem.Allocator,
+    environment: Environment,
+    runtime_error: ?RuntimeErrorInfo = null,
+
+    pub fn init(allocator: std.mem.Allocator) Self {
+        return .{
+            .allocator = allocator,
+            .environment = Environment.init(allocator),
+        };
+    }
+
+    pub fn interpret(self: *Self, stmt: std.ArrayList(Stmt)) RuntimeError!void {
+        for (stmt.items) |*statement| {
+            try self.execute(statement);
+        }
+    }
+
+    fn execute(self: *Self, stmt: *Stmt) RuntimeError!void {
+        switch (stmt.*) {
+            .print => {
+                const value = self.evaluate(stmt.print) catch |err| {
+                    runtimeError(self.runtime_error.?.token, @errorName(err));
+                    return;
+                };
+                std.debug.print("> {s}\n", .{try self.stringify(value)});
+            },
+            .expression => {
+                _ = self.evaluate(stmt.expression) catch |err| {
+                    runtimeError(self.runtime_error.?.token, @errorName(err));
+                };
+            },
+            .value => {
+                var value = null;
+                if (stmt.variable.initializer != null) {
+                    value = try self.evaluate(stmt.variable.name.lexeme, value);
+                }
+                self.environment.define(stmt.variable.name.lexeme, value);
+                return;
+            },
+        }
+    }
+
+    fn stringify(self: *Self, literal: Literal) RuntimeError![]const u8 {
+        return switch (literal) {
+            .none => "nil",
+            .number => try std.fmt.allocPrint(self.allocator, "{d}", .{literal.number}),
+            .string => literal.string,
+            .boolean => if (literal.boolean) "true" else "false",
+        };
+    }
+
+    /// Pretty sure that there's a refactoring needed.
+    pub fn evaluate(self: *Self, expr: *const Expr) RuntimeError!Literal {
+        return switch (expr.*) {
+            .literal => return expr.*.literal,
+            .binary => {
+                const left = try self.evaluate(expr.binary.left);
+                const right = try self.evaluate(expr.binary.right);
+
+                return switch (expr.binary.operator.token_type) {
+                    .BANG => Literal{ .boolean = isTruthy(right) },
+                    .MINUS => {
+                        try self.checkNumberOperands(expr.binary.operator, left, right);
+                        return Literal{ .number = left.number - right.number };
+                    },
+                    .SLASH => {
+                        try self.checkNumberOperands(expr.binary.operator, left, right);
+                        return Literal{ .number = left.number / right.number };
+                    },
+                    .STAR => {
+                        try self.checkNumberOperands(expr.binary.operator, left, right);
+                        return Literal{ .number = left.number * right.number };
+                    },
+                    .PLUS => {
+                        return switch (left) {
+                            .number => switch (right) {
+                                .number => Literal{ .number = left.number + right.number },
+                                else => {
+                                    self.runtime_error = .{
+                                        .token = expr.binary.operator,
+                                        .message = "Operands must be two numbers",
+                                    };
+                                    return RuntimeError.OperandsMustBeNumbersOrStrings;
+                                },
+                            },
+                            .string => switch (right) {
+                                .string => Literal{ .string = try std.mem.concat(
+                                    self.allocator,
+                                    u8,
+                                    &.{ left.string, right.string },
+                                ) },
+                                else => {
+                                    self.runtime_error = .{
+                                        .token = expr.binary.operator,
+                                        .message = "Operands must be two strings",
+                                    };
+                                    return RuntimeError.OperandsMustBeNumbersOrStrings;
+                                },
+                            },
+                            else => unreachable,
+                        };
+                    },
+                    .GREATER => {
+                        try self.checkNumberOperands(expr.binary.operator, left, right);
+                        return Literal{ .boolean = left.number > right.number };
+                    },
+                    .GREATER_EQUAL => {
+                        try self.checkNumberOperands(expr.binary.operator, left, right);
+                        return Literal{ .boolean = left.number >= right.number };
+                    },
+                    .LESS => {
+                        try self.checkNumberOperands(expr.binary.operator, left, right);
+                        return Literal{ .boolean = left.number < right.number };
+                    },
+                    .LESS_EQUAL => {
+                        try self.checkNumberOperands(expr.binary.operator, left, right);
+                        return Literal{ .boolean = left.number <= right.number };
+                    },
+                    .BANG_EQUAL => Literal{ .boolean = !std.meta.eql(left, right) },
+                    .EQUAL_EQUAL => Literal{ .boolean = !std.meta.eql(left, right) },
+                    else => unreachable,
+                };
+            },
+            .unary => {
+                const right = try self.evaluate(expr.unary.right);
+
+                switch (expr.unary.operator.token_type) {
+                    .MINUS => return Literal{ .number = -right.number },
+                    else => unreachable,
+                }
+            },
+            .grouping => try self.evaluate(expr.grouping.expression),
+            .variable => self.environment.get(expr.variable.name),
+        };
+    }
+
+    fn checkNumberOperands(self: *Interpreter, operator: Token, left: Literal, right: Literal) RuntimeError!void {
+        if (left == .number and right == .number) return;
+
+        self.runtime_error = .{
+            .token = operator,
+            .message = "Operands Must be numbers",
+        };
+        return RuntimeError.OperandsMustBeNumbers;
+    }
+};
+
+const RuntimeError = error{
+    OperandsMustBeNumbers,
+    OperandsMustBeNumbersOrStrings,
+    OutOfMemory,
+};
+
+const RuntimeErrorInfo = struct {
+    token: Token,
+    message: []const u8,
+};
+
+fn isTruthy(literal: Literal) bool {
+    return switch (literal) {
+        .none => false,
+        .boolean => literal.boolean,
+        .number => literal.number != 0,
+        .string => literal.string.len != 0,
+    };
+}
