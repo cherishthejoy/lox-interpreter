@@ -6,7 +6,8 @@ const parseError = @import("main.zig").parseError;
 pub const Stmt = union(enum) {
     expression: *Expr,
     print: *Expr,
-    variable: struct { name: Token, initializer: *Expr },
+    variable: struct { name: Token, initializer: ?*Expr },
+    block: []Stmt,
 };
 
 /// Expression
@@ -35,38 +36,80 @@ pub const Parser = struct {
         };
     }
 
+    fn deinitStmt(self: *Parser, stmt: *Stmt) void {
+        switch (stmt.*) {
+            .block => |stmts| self.allocator.free(stmts),
+            else => {},
+        }
+    }
+
     pub fn parse(self: *Self) !std.ArrayList(Stmt) {
         var stmt = try std.ArrayList(Stmt).initCapacity(self.allocator, 10);
         while (!self.isAtEnd()) {
-            try stmt.append(self.allocator, try self.statement());
+            try stmt.append(self.allocator, try self.declaration());
         }
         return stmt;
     }
 
     fn declaration(self: *Self) !Stmt {
-        if (self.match(.VAR)) return try self.varDeclaration();
+        if (self.match(&[_]TokenType{.VAR})) return self.varDeclaration() catch |err| {
+            self.synchronize();
+            // parseError(err);
+            return err;
+        };
         return try self.statement();
     }
 
     fn varDeclaration(self: *Self) !Stmt {
         const name = try self.consume(.IDENTIFIER, "Expect variable name.");
-        var initializer = null;
 
-        if (self.match(&[_]TokenType{.EQUAL})) {
-            initializer = self.expression();
-        }
+        const ini = if (self.match(&[_]TokenType{.EQUAL}))
+            try self.expression()
+        else
+            null;
+        _ = try self.consume(.SEMICOLON, "Expect ';' after variable declaration.");
 
-        try self.consume(.SEMICOLON, "Expect ';' after variable declaration.");
         return Stmt{
             .variable = .{
                 .name = name,
-                .initializer = initializer,
+                .initializer = ini,
             },
         };
     }
 
+    fn assignment(self: *Self) !*Expr {
+        const expr = try self.equality();
+
+        if (self.match(&[_]TokenType{.EQUAL})) {
+            const equals = self.previous();
+            const value = try self.assignment();
+
+            switch (expr.*) {
+                .variable => {
+                    const name = expr.variable.name;
+                    const new_expr = try self.allocator.create(Expr);
+                    new_expr.* = Expr{
+                        .assign = .{
+                            .name = name,
+                            .value = value,
+                        },
+                    };
+                    return new_expr;
+                },
+                else => unreachable,
+            }
+
+            returnError(equals, "Invalid assignment target.");
+        }
+        return expr;
+    }
+
     fn statement(self: *Self) !Stmt {
         if (self.match(&[_]TokenType{.PRINT})) return try self.printStatement();
+        if (self.match(&[_]TokenType{.LEFT_BRACE})) {
+            const body = try self.block();
+            return Stmt{ .block = body };
+        }
         return try self.expressionStatement();
     }
 
@@ -82,8 +125,18 @@ pub const Parser = struct {
         return Stmt{ .expression = expr };
     }
 
+    fn block(self: *Self) ParseError![]Stmt {
+        var statements = try std.ArrayList(Stmt).initCapacity(self.allocator, 10);
+        while (!self.check(.RIGHT_BRACE) and !self.isAtEnd()) {
+            try statements.append(self.allocator, try self.declaration());
+        }
+        _ = try self.consume(.RIGHT_BRACE, "Expect '}' after block");
+        return try statements.toOwnedSlice(self.allocator);
+    }
+
     fn expression(self: *Self) ParseError!*Expr {
-        return try self.equality();
+        // return try self.equality();
+        return try self.assignment();
     }
 
     fn equality(self: *Self) ParseError!*Expr {
@@ -228,8 +281,8 @@ pub const Parser = struct {
         }
 
         if (self.match(&[_]TokenType{.IDENTIFIER})) {
-            const new_expr = try self.allcoator.create(Expr);
-            new_expr.* = Expr{ .variable = self.previous() };
+            const new_expr = try self.allocator.create(Expr);
+            new_expr.* = Expr{ .variable = .{ .name = self.previous() } };
             return new_expr;
         }
 
@@ -285,6 +338,7 @@ pub const Expr = union(enum) {
     grouping: Grouping,
     unary: Unary,
     variable: Variable,
+    assign: Assign,
 
     pub fn print(self: *const Expr) void {
         switch (self.*) {
@@ -307,6 +361,11 @@ pub const Expr = union(enum) {
             },
         }
     }
+};
+
+const Assign = struct {
+    name: Token,
+    value: *const Expr,
 };
 
 const Binary = struct {

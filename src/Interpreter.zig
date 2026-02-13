@@ -24,13 +24,13 @@ pub const Interpreter = struct {
     }
 
     pub fn interpret(self: *Self, stmt: std.ArrayList(Stmt)) RuntimeError!void {
-        for (stmt.items) |*statement| {
+        for (stmt.items) |statement| {
             try self.execute(statement);
         }
     }
 
-    fn execute(self: *Self, stmt: *Stmt) RuntimeError!void {
-        switch (stmt.*) {
+    fn execute(self: *Self, stmt: Stmt) RuntimeError!void {
+        switch (stmt) {
             .print => {
                 const value = self.evaluate(stmt.print) catch |err| {
                     runtimeError(self.runtime_error.?.token, @errorName(err));
@@ -43,14 +43,31 @@ pub const Interpreter = struct {
                     runtimeError(self.runtime_error.?.token, @errorName(err));
                 };
             },
-            .value => {
-                var value = null;
-                if (stmt.variable.initializer != null) {
-                    value = try self.evaluate(stmt.variable.name.lexeme, value);
-                }
-                self.environment.define(stmt.variable.name.lexeme, value);
+            .variable => {
+                const value = if (stmt.variable.initializer) |ini|
+                    try self.evaluate(ini)
+                else
+                    null;
+                try self.environment.define(stmt.variable.name.lexeme, value.?);
                 return;
             },
+            .block => {
+                const env = Environment.initEnclosing(
+                    self.allocator,
+                    &self.environment,
+                );
+                try self.executeBlock(stmt.block, env);
+                return;
+            },
+        }
+    }
+
+    fn executeBlock(self: *Self, statements: []Stmt, environment: Environment) !void {
+        const previous = self.environment;
+        self.environment = environment;
+        defer self.environment = previous;
+        for (statements) |stmt| {
+            try self.execute(stmt);
         }
     }
 
@@ -144,7 +161,12 @@ pub const Interpreter = struct {
                 }
             },
             .grouping => try self.evaluate(expr.grouping.expression),
-            .variable => self.environment.get(expr.variable.name),
+            .variable => try self.environment.get(expr.variable.name),
+            .assign => {
+                const value = try self.evaluate(expr.assign.value);
+                try self.environment.assign(expr.assign.name, value);
+                return value;
+            },
         };
     }
 
@@ -159,13 +181,14 @@ pub const Interpreter = struct {
     }
 };
 
-const RuntimeError = error{
+pub const RuntimeError = error{
     OperandsMustBeNumbers,
     OperandsMustBeNumbersOrStrings,
     OutOfMemory,
+    UndefinedVariable,
 };
 
-const RuntimeErrorInfo = struct {
+pub const RuntimeErrorInfo = struct {
     token: Token,
     message: []const u8,
 };
