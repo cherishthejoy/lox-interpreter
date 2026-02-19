@@ -68,7 +68,7 @@ fn run(string: []const u8, allocator: Allocator) !void {
         return;
     };
 
-    var interpreter = Interpreter.init(allocator);
+    var interpreter = try Interpreter.init(allocator);
     try interpreter.interpret(statements);
 
     if (had_error) return;

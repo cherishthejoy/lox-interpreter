@@ -8,6 +8,7 @@ pub const Stmt = union(enum) {
     if_stmt: struct { condition: *Expr, then_branch: *Stmt, else_branch: ?*Stmt },
     print: *Expr,
     variable: struct { name: Token, initializer: ?*Expr },
+    while_stmt: struct { condition: *Expr, body: *Stmt },
     block: []*Stmt,
 };
 
@@ -99,7 +100,9 @@ pub const Parser = struct {
                     };
                     return new_expr;
                 },
-                else => unreachable,
+                else => {
+                    return returnError(equals, "Invalid assignment target.");
+                },
             }
 
             returnError(equals, "Invalid assignment target.");
@@ -108,8 +111,10 @@ pub const Parser = struct {
     }
 
     fn statement(self: *Self) !*Stmt {
+        if (self.match(&[_]TokenType{.FOR})) return try self.forStatement();
         if (self.match(&[_]TokenType{.IF})) return try self.ifStatement();
         if (self.match(&[_]TokenType{.PRINT})) return try self.printStatement();
+        if (self.match(&[_]TokenType{.WHILE})) return try self.whileStatement();
         if (self.match(&[_]TokenType{.LEFT_BRACE})) {
             const body = try self.block();
             const new_stmt = try self.allocator.create(Stmt);
@@ -117,6 +122,78 @@ pub const Parser = struct {
             return new_stmt;
         }
         return try self.expressionStatement();
+    }
+
+    fn forStatement(self: *Self) ParseError!*Stmt {
+        _ = try self.consume(.LEFT_PAREN, "Expect '(' after 'for'.");
+
+        var initializer: ?*Stmt = null;
+
+        if (self.match(&[_]TokenType{.SEMICOLON})) {
+            initializer = null;
+        } else if (self.match(&[_]TokenType{.VAR})) {
+            initializer = try self.varDeclaration();
+        } else {
+            initializer = try self.expressionStatement();
+        }
+
+        var condition: ?*Expr = null;
+        if (!self.check(.SEMICOLON)) {
+            condition = try self.expression();
+        }
+        _ = try self.consume(.SEMICOLON, "Expect ';' after loop condition.");
+
+        var increment: ?*Expr = null;
+        if (!self.check(.RIGHT_PAREN)) {
+            increment = try self.expression();
+        }
+        _ = try self.consume(.RIGHT_PAREN, "Expect ')' after for clauses.");
+
+        var body = try self.statement();
+        const new_stmt = try self.allocator.create(Stmt);
+
+        if (increment != null) {
+            const new_inner_stmt = try self.allocator.create(Stmt);
+            new_inner_stmt.* = Stmt{ .expression = increment.? };
+
+            const stmt_array: [2]*Stmt = .{ body, new_inner_stmt };
+            const stmt_slice = try self.allocator.dupe(*Stmt, &stmt_array);
+            new_stmt.* = Stmt{ .block = stmt_slice };
+            body = new_stmt;
+        }
+
+        const new_expr = try self.allocator.create(Expr);
+        new_expr.* = Expr{ .literal = .{ .boolean = true } };
+        if (condition == null) condition = new_expr;
+        const new_while_stmt = try self.allocator.create(Stmt);
+        new_while_stmt.* = Stmt{
+            .while_stmt = .{ .condition = condition.?, .body = body },
+        };
+        body = new_while_stmt;
+
+        if (initializer != null) {
+            const new_inner_stmt = try self.allocator.create(Stmt);
+            const stmt_array: [2]*Stmt = .{ initializer.?, body };
+            const stmt_slice = try self.allocator.dupe(*Stmt, &stmt_array);
+            new_inner_stmt.* = Stmt{ .block = stmt_slice };
+            body = new_inner_stmt;
+        }
+
+        return body;
+    }
+
+    fn whileStatement(self: *Self) ParseError!*Stmt {
+        _ = try self.consume(.LEFT_PAREN, "Expect '(' after 'while'.");
+        const condition = try self.expression();
+        _ = try self.consume(.RIGHT_PAREN, "Expect ')' after condition.");
+
+        const body = try self.statement();
+        const new_stmt = try self.allocator.create(Stmt);
+        new_stmt.* = Stmt{
+            .while_stmt = .{ .condition = condition, .body = body },
+        };
+
+        return new_stmt;
     }
 
     fn ifStatement(self: *Self) ParseError!*Stmt {

@@ -13,13 +13,13 @@ pub const Interpreter = struct {
     const Self = @This();
 
     allocator: std.mem.Allocator,
-    environment: Environment,
+    environment: *Environment,
     runtime_error: ?RuntimeErrorInfo = null,
 
-    pub fn init(allocator: std.mem.Allocator) Self {
+    pub fn init(allocator: std.mem.Allocator) !Self {
         return .{
             .allocator = allocator,
-            .environment = Environment.init(allocator),
+            .environment = try Environment.init(allocator),
         };
     }
 
@@ -46,6 +46,14 @@ pub const Interpreter = struct {
                 }
                 return;
             },
+
+            .while_stmt => {
+                while (isTruthy(try self.evaluate(stmt.while_stmt.condition))) {
+                    try self.execute(stmt.while_stmt.body);
+                }
+                return;
+            },
+
             .expression => {
                 _ = self.evaluate(stmt.expression) catch |err| {
                     runtimeError(self.runtime_error.?.token, @errorName(err));
@@ -56,13 +64,13 @@ pub const Interpreter = struct {
                     try self.evaluate(ini)
                 else
                     null;
-                try self.environment.define(stmt.variable.name.lexeme, value.?);
+                try self.environment.define(stmt.variable.name.lexeme, value orelse .none);
                 return;
             },
             .block => {
-                const env = Environment.initEnclosing(
+                const env = try Environment.initEnclosing(
                     self.allocator,
-                    &self.environment,
+                    self.environment,
                 );
                 try self.executeBlock(stmt.block, env);
                 return;
@@ -70,7 +78,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn executeBlock(self: *Self, statements: []*Stmt, environment: Environment) !void {
+    fn executeBlock(self: *Self, statements: []*Stmt, environment: *Environment) !void {
         const previous = self.environment;
         self.environment = environment;
         defer self.environment = previous;
@@ -97,7 +105,6 @@ pub const Interpreter = struct {
                 const right = try self.evaluate(expr.binary.right);
 
                 return switch (expr.binary.operator.token_type) {
-                    .BANG => Literal{ .boolean = isTruthy(right) },
                     .MINUS => {
                         try self.checkNumberOperands(expr.binary.operator, left, right);
                         return Literal{ .number = left.number - right.number };
@@ -156,7 +163,7 @@ pub const Interpreter = struct {
                         return Literal{ .boolean = left.number <= right.number };
                     },
                     .BANG_EQUAL => Literal{ .boolean = !std.meta.eql(left, right) },
-                    .EQUAL_EQUAL => Literal{ .boolean = !std.meta.eql(left, right) },
+                    .EQUAL_EQUAL => Literal{ .boolean = std.meta.eql(left, right) },
                     else => unreachable,
                 };
             },
@@ -164,6 +171,7 @@ pub const Interpreter = struct {
                 const right = try self.evaluate(expr.unary.right);
 
                 switch (expr.unary.operator.token_type) {
+                    .BANG => return Literal{ .boolean = isTruthy(right) },
                     .MINUS => return Literal{ .number = -right.number },
                     else => unreachable,
                 }
