@@ -23,20 +23,28 @@ pub const Interpreter = struct {
         };
     }
 
-    pub fn interpret(self: *Self, stmt: std.ArrayList(Stmt)) RuntimeError!void {
+    pub fn interpret(self: *Self, stmt: std.ArrayList(*Stmt)) RuntimeError!void {
         for (stmt.items) |statement| {
             try self.execute(statement);
         }
     }
 
-    fn execute(self: *Self, stmt: Stmt) RuntimeError!void {
-        switch (stmt) {
+    fn execute(self: *Self, stmt: *Stmt) RuntimeError!void {
+        switch (stmt.*) {
             .print => {
                 const value = self.evaluate(stmt.print) catch |err| {
                     runtimeError(self.runtime_error.?.token, @errorName(err));
                     return;
                 };
                 std.debug.print("> {s}\n", .{try self.stringify(value)});
+            },
+            .if_stmt => {
+                if (isTruthy(try self.evaluate(stmt.if_stmt.condition))) {
+                    try self.execute(stmt.if_stmt.then_branch);
+                } else if (stmt.*.if_stmt.else_branch == null) {
+                    try self.execute(stmt.if_stmt.else_branch.?);
+                }
+                return;
             },
             .expression => {
                 _ = self.evaluate(stmt.expression) catch |err| {
@@ -62,7 +70,7 @@ pub const Interpreter = struct {
         }
     }
 
-    fn executeBlock(self: *Self, statements: []Stmt, environment: Environment) !void {
+    fn executeBlock(self: *Self, statements: []*Stmt, environment: Environment) !void {
         const previous = self.environment;
         self.environment = environment;
         defer self.environment = previous;
@@ -159,6 +167,16 @@ pub const Interpreter = struct {
                     .MINUS => return Literal{ .number = -right.number },
                     else => unreachable,
                 }
+            },
+            .logical => {
+                const left = try self.evaluate(expr.logical.left);
+
+                if (expr.logical.operator.token_type == .OR) {
+                    if (isTruthy(left)) return left;
+                } else {
+                    if (!isTruthy(left)) return left;
+                }
+                return try self.evaluate(expr.logical.right);
             },
             .grouping => try self.evaluate(expr.grouping.expression),
             .variable => try self.environment.get(expr.variable.name),

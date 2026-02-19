@@ -5,9 +5,10 @@ const parseError = @import("main.zig").parseError;
 
 pub const Stmt = union(enum) {
     expression: *Expr,
+    if_stmt: struct { condition: *Expr, then_branch: *Stmt, else_branch: ?*Stmt },
     print: *Expr,
     variable: struct { name: Token, initializer: ?*Expr },
-    block: []Stmt,
+    block: []*Stmt,
 };
 
 /// Expression
@@ -43,15 +44,15 @@ pub const Parser = struct {
         }
     }
 
-    pub fn parse(self: *Self) !std.ArrayList(Stmt) {
-        var stmt = try std.ArrayList(Stmt).initCapacity(self.allocator, 10);
+    pub fn parse(self: *Self) !std.ArrayList(*Stmt) {
+        var stmt = try std.ArrayList(*Stmt).initCapacity(self.allocator, 10);
         while (!self.isAtEnd()) {
             try stmt.append(self.allocator, try self.declaration());
         }
         return stmt;
     }
 
-    fn declaration(self: *Self) !Stmt {
+    fn declaration(self: *Self) !*Stmt {
         if (self.match(&[_]TokenType{.VAR})) return self.varDeclaration() catch |err| {
             self.synchronize();
             // parseError(err);
@@ -60,7 +61,7 @@ pub const Parser = struct {
         return try self.statement();
     }
 
-    fn varDeclaration(self: *Self) !Stmt {
+    fn varDeclaration(self: *Self) !*Stmt {
         const name = try self.consume(.IDENTIFIER, "Expect variable name.");
 
         const ini = if (self.match(&[_]TokenType{.EQUAL}))
@@ -68,17 +69,19 @@ pub const Parser = struct {
         else
             null;
         _ = try self.consume(.SEMICOLON, "Expect ';' after variable declaration.");
-
-        return Stmt{
+        const new_stmt = try self.allocator.create(Stmt);
+        new_stmt.* = Stmt{
             .variable = .{
                 .name = name,
                 .initializer = ini,
             },
         };
+
+        return new_stmt;
     }
 
     fn assignment(self: *Self) !*Expr {
-        const expr = try self.equality();
+        const expr = try self.myOr();
 
         if (self.match(&[_]TokenType{.EQUAL})) {
             const equals = self.previous();
@@ -104,29 +107,99 @@ pub const Parser = struct {
         return expr;
     }
 
-    fn statement(self: *Self) !Stmt {
+    fn statement(self: *Self) !*Stmt {
+        if (self.match(&[_]TokenType{.IF})) return try self.ifStatement();
         if (self.match(&[_]TokenType{.PRINT})) return try self.printStatement();
         if (self.match(&[_]TokenType{.LEFT_BRACE})) {
             const body = try self.block();
-            return Stmt{ .block = body };
+            const new_stmt = try self.allocator.create(Stmt);
+            new_stmt.* = Stmt{ .block = body };
+            return new_stmt;
         }
         return try self.expressionStatement();
     }
 
-    fn printStatement(self: *Self) !Stmt {
-        const expr = try self.expression();
-        _ = try self.consume(.SEMICOLON, "Expect ';' after value.");
-        return Stmt{ .print = expr };
+    fn ifStatement(self: *Self) ParseError!*Stmt {
+        _ = try self.consume(.LEFT_PAREN, "Expect '(' after 'if'.");
+        const condition = try self.expression();
+        _ = try self.consume(.RIGHT_PAREN, "Expect ')' after if condition.");
+
+        const then_branch = try self.statement();
+        var else_branch: ?*Stmt = null;
+        if (self.match(&[_]TokenType{.ELSE})) {
+            else_branch = try self.statement();
+        }
+        const new_stmt = try self.allocator.create(Stmt);
+
+        new_stmt.* = Stmt{
+            .if_stmt = .{
+                .condition = condition,
+                .then_branch = then_branch,
+                .else_branch = else_branch,
+            },
+        };
+
+        return new_stmt;
     }
 
-    fn expressionStatement(self: *Self) !Stmt {
-        const expr = try self.expression();
-        _ = try self.consume(.SEMICOLON, "Expect ';' after value.");
-        return Stmt{ .expression = expr };
+    fn myOr(self: *Self) !*Expr {
+        var expr = try self.myAnd();
+
+        while (self.match(&[_]TokenType{.OR})) {
+            const operator = self.previous();
+            const right = try self.myAnd();
+            const new_expr = try self.allocator.create(Expr);
+
+            new_expr.* = Expr{
+                .logical = .{
+                    .left = expr,
+                    .operator = operator,
+                    .right = right,
+                },
+            };
+            expr = new_expr;
+        }
+        return expr;
     }
 
-    fn block(self: *Self) ParseError![]Stmt {
-        var statements = try std.ArrayList(Stmt).initCapacity(self.allocator, 10);
+    fn myAnd(self: *Self) !*Expr {
+        var expr = try self.equality();
+
+        while (self.match(&[_]TokenType{.AND})) {
+            const operator = self.previous();
+            const right = try self.equality();
+            const new_expr = try self.allocator.create(Expr);
+
+            new_expr.* = Expr{
+                .logical = .{
+                    .left = expr,
+                    .operator = operator,
+                    .right = right,
+                },
+            };
+            expr = new_expr;
+        }
+        return expr;
+    }
+
+    fn printStatement(self: *Self) !*Stmt {
+        const expr = try self.expression();
+        _ = try self.consume(.SEMICOLON, "Expect ';' after value.");
+        const new_stmt = try self.allocator.create(Stmt);
+        new_stmt.* = Stmt{ .print = expr };
+        return new_stmt;
+    }
+
+    fn expressionStatement(self: *Self) !*Stmt {
+        const expr = try self.expression();
+        _ = try self.consume(.SEMICOLON, "Expect ';' after value.");
+        const new_stmt = try self.allocator.create(Stmt);
+        new_stmt.* = Stmt{ .expression = expr };
+        return new_stmt;
+    }
+
+    fn block(self: *Self) ParseError![]*Stmt {
+        var statements = try std.ArrayList(*Stmt).initCapacity(self.allocator, 10);
         while (!self.check(.RIGHT_BRACE) and !self.isAtEnd()) {
             try statements.append(self.allocator, try self.declaration());
         }
@@ -135,7 +208,6 @@ pub const Parser = struct {
     }
 
     fn expression(self: *Self) ParseError!*Expr {
-        // return try self.equality();
         return try self.assignment();
     }
 
@@ -335,6 +407,7 @@ pub const Parser = struct {
 pub const Expr = union(enum) {
     binary: Binary,
     literal: Literal,
+    logical: Logical,
     grouping: Grouping,
     unary: Unary,
     variable: Variable,
@@ -379,6 +452,12 @@ pub const Literal = union(enum) {
     number: f64,
     string: []const u8,
     boolean: bool,
+};
+
+const Logical = struct {
+    left: *const Expr,
+    operator: Token,
+    right: *const Expr,
 };
 
 const Grouping = struct {
