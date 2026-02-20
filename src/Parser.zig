@@ -2,14 +2,22 @@ const std = @import("std");
 const Token = @import("Token.zig").Token;
 const TokenType = @import("TokenType.zig").TokenType;
 const parseError = @import("main.zig").parseError;
+const LoxCallable = @import("LoxCallable.zig").LoxCallable;
 
 pub const Stmt = union(enum) {
     expression: *Expr,
+    function: FunctionDecl,
     if_stmt: struct { condition: *Expr, then_branch: *Stmt, else_branch: ?*Stmt },
     print: *Expr,
     variable: struct { name: Token, initializer: ?*Expr },
     while_stmt: struct { condition: *Expr, body: *Stmt },
     block: []*Stmt,
+};
+
+pub const FunctionDecl = struct {
+    name: Token,
+    params: []Token,
+    body: []*Stmt,
 };
 
 /// Expression
@@ -54,12 +62,53 @@ pub const Parser = struct {
     }
 
     fn declaration(self: *Self) !*Stmt {
+        if (self.match(&[_]TokenType{.FUN})) return try self.function("function");
         if (self.match(&[_]TokenType{.VAR})) return self.varDeclaration() catch |err| {
             self.synchronize();
             // parseError(err);
             return err;
         };
         return try self.statement();
+    }
+
+    fn function(self: *Self, kind: []const u8) ParseError!*Stmt {
+        var message = try std.fmt.allocPrint(self.allocator, "Expect {s} name.", .{kind});
+        const name = try self.consume(.IDENTIFIER, message);
+
+        message = try std.fmt.allocPrint(self.allocator, "Expect '(' after {s}", .{kind});
+        _ = try self.consume(.LEFT_PAREN, message);
+        var parameters = std.ArrayList(Token).empty;
+        if (!self.check(.RIGHT_PAREN)) {
+            while (true) {
+                if (parameters.items.len >= 255) {
+                    return returnError(self.peek(), "Can't have more than 255 arguments.");
+                }
+                try parameters.append(
+                    self.allocator,
+                    try self.consume(
+                        .IDENTIFIER,
+                        "Expect paramter name",
+                    ),
+                );
+                if (!self.match(&[_]TokenType{.COMMA})) break;
+            }
+        }
+        _ = try self.consume(.RIGHT_PAREN, "Expect ')' after parameters.");
+        message = try std.fmt.allocPrint(self.allocator, "Expect '{{' before {s} body.", .{kind});
+        _ = try self.consume(.LEFT_BRACE, message);
+        const body = try self.block();
+
+        const new_function = try self.allocator.create(Stmt);
+
+        new_function.* = Stmt{
+            .function = FunctionDecl{
+                .name = name,
+                .params = parameters.items,
+                .body = body,
+            },
+        };
+
+        return new_function;
     }
 
     fn varDeclaration(self: *Self) !*Stmt {
@@ -406,6 +455,42 @@ pub const Parser = struct {
         return expr;
     }
 
+    fn call(self: *Self) !*Expr {
+        var expr = try self.primary();
+
+        while (true) {
+            if (self.match(&[_]TokenType{.LEFT_PAREN}))
+                expr = try self.finishCall(expr)
+            else
+                break;
+        }
+        return expr;
+    }
+
+    fn finishCall(self: *Self, callee: *Expr) !*Expr {
+        var arguments = std.ArrayList(*Expr).empty;
+        if (!self.check(.RIGHT_PAREN)) {
+            while (true) {
+                if (arguments.items.len >= 255) {
+                    parseError(self.peek(), "Can't have more than 255 arguements.");
+                }
+                try arguments.append(self.allocator, try self.expression());
+                if (!self.match(&[_]TokenType{.COMMA})) break;
+            }
+        }
+        const paren = try self.consume(.RIGHT_PAREN, "Expect ')' after arguments.");
+        const new_expr = try self.allocator.create(Expr);
+        new_expr.* = Expr{
+            .caller = .{
+                .callee = callee,
+                .paren = paren,
+                .arguments = arguments.items,
+            },
+        };
+
+        return new_expr;
+    }
+
     fn unary(self: *Self) ParseError!*Expr {
         if (self.match(&[_]TokenType{ .BANG, .MINUS })) {
             const operator = self.previous();
@@ -417,7 +502,8 @@ pub const Parser = struct {
             };
             return new_expr;
         }
-        return self.primary();
+        // return self.primary();
+        return self.call();
     }
 
     fn primary(self: *Self) ParseError!*Expr {
@@ -484,6 +570,7 @@ pub const Parser = struct {
 pub const Expr = union(enum) {
     binary: Binary,
     literal: Literal,
+    caller: Caller,
     logical: Logical,
     grouping: Grouping,
     unary: Unary,
@@ -524,11 +611,18 @@ const Binary = struct {
     right: *const Expr,
 };
 
+const Caller = struct {
+    callee: *const Expr,
+    paren: Token,
+    arguments: []*Expr,
+};
+
 pub const Literal = union(enum) {
     none,
     number: f64,
     string: []const u8,
     boolean: bool,
+    callable: LoxCallable,
 };
 
 const Logical = struct {

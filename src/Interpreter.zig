@@ -4,6 +4,8 @@ const Expr = Parser.Expr;
 const Literal = Parser.Literal;
 const Token = @import("Token.zig").Token;
 const Stmt = Parser.Stmt;
+const LoxCallable = @import("LoxCallable.zig").LoxCallable;
+const LoxFunction = @import("LoxFunction.zig").LoxFunction;
 
 const Environment = @import("Environment.zig").Environment;
 
@@ -14,13 +16,27 @@ pub const Interpreter = struct {
 
     allocator: std.mem.Allocator,
     environment: *Environment,
+    globals: *Environment,
     runtime_error: ?RuntimeErrorInfo = null,
 
     pub fn init(allocator: std.mem.Allocator) !Self {
-        return .{
+        const globals = try Environment.init(allocator);
+        var self = Self{
             .allocator = allocator,
-            .environment = try Environment.init(allocator),
+            .globals = globals,
+            .environment = globals,
         };
+
+        const clock = LoxCallable{
+            .native = .{
+                .arity = 0,
+                .call = &clockNative,
+            },
+        };
+
+        try self.globals.define("clock", Literal{ .callable = clock });
+
+        return self;
     }
 
     pub fn interpret(self: *Self, stmt: std.ArrayList(*Stmt)) RuntimeError!void {
@@ -46,14 +62,12 @@ pub const Interpreter = struct {
                 }
                 return;
             },
-
             .while_stmt => {
                 while (isTruthy(try self.evaluate(stmt.while_stmt.condition))) {
                     try self.execute(stmt.while_stmt.body);
                 }
                 return;
             },
-
             .expression => {
                 _ = self.evaluate(stmt.expression) catch |err| {
                     runtimeError(self.runtime_error.?.token, @errorName(err));
@@ -75,10 +89,21 @@ pub const Interpreter = struct {
                 try self.executeBlock(stmt.block, env);
                 return;
             },
+            .function => {
+                const new_function = try self.allocator.create(LoxFunction);
+                new_function.* = LoxFunction.init(&stmt.function);
+                try self.environment.define(
+                    stmt.function.name.lexeme,
+                    Literal{
+                        .callable = .{ .function = new_function },
+                    },
+                );
+                return;
+            },
         }
     }
 
-    fn executeBlock(self: *Self, statements: []*Stmt, environment: *Environment) !void {
+    pub fn executeBlock(self: *Self, statements: []*Stmt, environment: *Environment) !void {
         const previous = self.environment;
         self.environment = environment;
         defer self.environment = previous;
@@ -93,6 +118,7 @@ pub const Interpreter = struct {
             .number => try std.fmt.allocPrint(self.allocator, "{d}", .{literal.number}),
             .string => literal.string,
             .boolean => if (literal.boolean) "true" else "false",
+            .callable => "native fn",
         };
     }
 
@@ -167,6 +193,47 @@ pub const Interpreter = struct {
                     else => unreachable,
                 };
             },
+            .caller => {
+                const callee = try self.evaluate(expr.caller.callee);
+                var arguments = std.ArrayList(Literal).empty;
+
+                for (expr.caller.arguments) |arg| {
+                    try arguments.append(self.allocator, try self.evaluate(arg));
+                }
+
+                switch (callee) {
+                    .callable => |callable| {
+                        switch (callable) {
+                            .native => |n| {
+                                if (arguments.items.len != n.arity) {
+                                    const message = try std.fmt.allocPrint(
+                                        self.allocator,
+                                        "Expected {d} arguments but got {d}",
+                                        .{ n.arity, arguments.items.len },
+                                    );
+                                    runtimeError(expr.caller.paren, message);
+                                }
+                                return n.call(self, arguments.items);
+                            },
+                            .function => |f| {
+                                if (arguments.items.len != f.arity()) {
+                                    const message = try std.fmt.allocPrint(
+                                        self.allocator,
+                                        "Expected {d} arguments but got {d}",
+                                        .{ f.arity(), arguments.items.len },
+                                    );
+                                    runtimeError(expr.caller.paren, message);
+                                }
+                                return try f.call(self, arguments.items);
+                            },
+                        }
+                    },
+                    else => {
+                        runtimeError(expr.caller.paren, "Can only call functions and classes");
+                        return RuntimeError.UndefinedVariable;
+                    },
+                }
+            },
             .unary => {
                 const right = try self.evaluate(expr.unary.right);
 
@@ -225,5 +292,13 @@ fn isTruthy(literal: Literal) bool {
         .boolean => literal.boolean,
         .number => literal.number != 0,
         .string => literal.string.len != 0,
+        else => unreachable,
     };
+}
+
+fn clockNative(interpreter: *Interpreter, args: []Literal) Literal {
+    _ = interpreter;
+    _ = args;
+    const ms: f64 = @floatFromInt(std.time.milliTimestamp());
+    return Literal{ .number = ms / 1000.0 };
 }
