@@ -9,6 +9,7 @@ pub const Stmt = union(enum) {
     function: FunctionDecl,
     if_stmt: struct { condition: *Expr, then_branch: *Stmt, else_branch: ?*Stmt },
     print: *Expr,
+    return_stmt: struct { keyword: Token, value: ?*Expr },
     variable: struct { name: Token, initializer: ?*Expr },
     while_stmt: struct { condition: *Expr, body: *Stmt },
     block: []*Stmt,
@@ -163,6 +164,7 @@ pub const Parser = struct {
         if (self.match(&[_]TokenType{.FOR})) return try self.forStatement();
         if (self.match(&[_]TokenType{.IF})) return try self.ifStatement();
         if (self.match(&[_]TokenType{.PRINT})) return try self.printStatement();
+        if (self.match(&[_]TokenType{.RETURN})) return try self.returnStatement();
         if (self.match(&[_]TokenType{.WHILE})) return try self.whileStatement();
         if (self.match(&[_]TokenType{.LEFT_BRACE})) {
             const body = try self.block();
@@ -171,6 +173,24 @@ pub const Parser = struct {
             return new_stmt;
         }
         return try self.expressionStatement();
+    }
+
+    fn returnStatement(self: *Self) ParseError!*Stmt {
+        const keyword = self.previous();
+        var value: ?*Expr = null;
+
+        if (!self.check(.SEMICOLON)) value = try self.expression();
+        _ = try self.consume(.SEMICOLON, "Expect ';' after return value.");
+
+        const new_stmt = try self.allocator.create(Stmt);
+        new_stmt.* = Stmt{
+            .return_stmt = .{
+                .keyword = keyword,
+                .value = value.?,
+            },
+        };
+
+        return new_stmt;
     }
 
     fn forStatement(self: *Self) ParseError!*Stmt {

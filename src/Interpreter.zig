@@ -18,6 +18,7 @@ pub const Interpreter = struct {
     environment: *Environment,
     globals: *Environment,
     runtime_error: ?RuntimeErrorInfo = null,
+    return_value: ?Literal = null,
 
     pub fn init(allocator: std.mem.Allocator) !Self {
         const globals = try Environment.init(allocator);
@@ -58,7 +59,9 @@ pub const Interpreter = struct {
                 if (isTruthy(try self.evaluate(stmt.if_stmt.condition))) {
                     try self.execute(stmt.if_stmt.then_branch);
                 } else if (stmt.*.if_stmt.else_branch == null) {
-                    try self.execute(stmt.if_stmt.else_branch.?);
+                    if (stmt.if_stmt.else_branch) |else_branch| {
+                        try self.execute(else_branch);
+                    }
                 }
                 return;
             },
@@ -91,7 +94,7 @@ pub const Interpreter = struct {
             },
             .function => {
                 const new_function = try self.allocator.create(LoxFunction);
-                new_function.* = LoxFunction.init(&stmt.function);
+                new_function.* = LoxFunction.init(&stmt.function, self.environment);
                 try self.environment.define(
                     stmt.function.name.lexeme,
                     Literal{
@@ -99,6 +102,12 @@ pub const Interpreter = struct {
                     },
                 );
                 return;
+            },
+            .return_stmt => {
+                if (stmt.return_stmt.value != null) {
+                    self.return_value = try self.evaluate(stmt.return_stmt.value.?);
+                }
+                return RuntimeError.Return;
             },
         }
     }
@@ -279,6 +288,7 @@ pub const RuntimeError = error{
     OperandsMustBeNumbersOrStrings,
     OutOfMemory,
     UndefinedVariable,
+    Return,
 };
 
 pub const RuntimeErrorInfo = struct {
