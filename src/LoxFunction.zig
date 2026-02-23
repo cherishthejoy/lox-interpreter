@@ -39,12 +39,14 @@ pub const LoxFunction = struct {
             },
             else => return err,
         };
-
-        // try interpreter.executeBlock(self.declaration.body, environment);
         return .none;
     }
 
     pub fn arity(self: *Self) usize {
         return self.declaration.params.len;
+    }
+
+    pub fn toString(self: *Self) []const u8 {
+        return self.declaration.name.lexeme;
     }
 };

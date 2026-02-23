@@ -43,6 +43,10 @@ pub const Resolver = struct {
                 try self.resolveStmts(statement.block);
                 self.endScope();
             },
+            .class => {
+                try self.declare(statement.class.name);
+                try self.define(statement.class.name);
+            },
             .expression => {
                 try self.resolveExpr(statement.expression);
             },

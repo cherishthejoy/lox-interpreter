@@ -3,9 +3,12 @@ const Token = @import("Token.zig").Token;
 const TokenType = @import("TokenType.zig").TokenType;
 const parseError = @import("main.zig").parseError;
 const LoxCallable = @import("LoxCallable.zig").LoxCallable;
+const LoxClass = @import("LoxClass.zig").LoxClass;
+const LoxInstance = @import("LoxInstance.zig").LoxInstance;
 
 pub const Stmt = union(enum) {
     expression: *Expr,
+    class: ClassDecl,
     function: FunctionDecl,
     if_stmt: struct { condition: *Expr, then_branch: *Stmt, else_branch: ?*Stmt },
     print: *Expr,
@@ -19,6 +22,11 @@ pub const FunctionDecl = struct {
     name: Token,
     params: []Token,
     body: []*Stmt,
+};
+
+pub const ClassDecl = struct {
+    name: Token,
+    methods: []FunctionDecl,
 };
 
 pub const Block = struct {
@@ -67,6 +75,7 @@ pub const Parser = struct {
     }
 
     fn declaration(self: *Self) !*Stmt {
+        if (self.match(&[_]TokenType{.CLASS})) return self.classDeclaration();
         if (self.match(&[_]TokenType{.FUN})) return try self.function("function");
         if (self.match(&[_]TokenType{.VAR})) return self.varDeclaration() catch |err| {
             self.synchronize();
@@ -74,6 +83,29 @@ pub const Parser = struct {
             return err;
         };
         return try self.statement();
+    }
+
+    fn classDeclaration(self: *Self) !*Stmt {
+        const name = try self.consume(.IDENTIFIER, "Expect class name.");
+        _ = try self.consume(.LEFT_BRACE, "Expect '{' before class body.");
+
+        var methods = std.ArrayList(FunctionDecl).empty;
+        while (!self.check(.RIGHT_BRACE) and !self.isAtEnd()) {
+            const func = try self.function("method");
+            try methods.append(self.allocator, func.function);
+        }
+
+        _ = try self.consume(.RIGHT_BRACE, "Expect '}' after class body.");
+
+        const new_stmt = try self.allocator.create(Stmt);
+
+        new_stmt.* = Stmt{
+            .class = .{
+                .name = name,
+                .methods = try methods.toOwnedSlice(self.allocator),
+            },
+        };
+        return new_stmt;
     }
 
     fn function(self: *Self, kind: []const u8) ParseError!*Stmt {
@@ -647,6 +679,8 @@ pub const Literal = union(enum) {
     string: []const u8,
     boolean: bool,
     callable: LoxCallable,
+    class: *LoxClass,
+    instance: *LoxInstance,
 };
 
 const Logical = struct {

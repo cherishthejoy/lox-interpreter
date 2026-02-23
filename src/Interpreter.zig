@@ -6,6 +6,7 @@ const Token = @import("Token.zig").Token;
 const Stmt = Parser.Stmt;
 const LoxCallable = @import("LoxCallable.zig").LoxCallable;
 const LoxFunction = @import("LoxFunction.zig").LoxFunction;
+const LoxClass = @import("LoxClass.zig").LoxClass;
 
 const Environment = @import("Environment.zig").Environment;
 
@@ -95,6 +96,12 @@ pub const Interpreter = struct {
                 try self.executeBlock(stmt.block, env);
                 return;
             },
+            .class => {
+                try self.environment.define(stmt.class.name.lexeme, .none);
+                const new_class = try self.allocator.create(LoxClass);
+                new_class.* = LoxClass.init(stmt.class.name.lexeme);
+                try self.environment.assign(stmt.class.name, Literal{ .callable = .{ .class = new_class } });
+            },
             .function => {
                 const new_function = try self.allocator.create(LoxFunction);
                 new_function.* = LoxFunction.init(&stmt.function, self.environment);
@@ -130,7 +137,25 @@ pub const Interpreter = struct {
             .number => try std.fmt.allocPrint(self.allocator, "{d}", .{literal.number}),
             .string => literal.string,
             .boolean => if (literal.boolean) "true" else "false",
-            .callable => "native fn",
+            .callable => {
+                return try std.fmt.allocPrint(
+                    self.allocator,
+                    "<fn {s}>",
+                    .{
+                        literal.callable.function.toString(),
+                    },
+                );
+            },
+            .class => literal.class.toString(),
+            .instance => {
+                return try std.fmt.allocPrint(
+                    self.allocator,
+                    "{s} instance",
+                    .{
+                        literal.instance.class.toString(),
+                    },
+                );
+            },
         };
     }
 
@@ -237,6 +262,9 @@ pub const Interpreter = struct {
                                     runtimeError(expr.caller.paren, message);
                                 }
                                 return try f.call(self, arguments.items);
+                            },
+                            .class => |cls| {
+                                return try cls.call(self, arguments.items);
                             },
                         }
                     },
