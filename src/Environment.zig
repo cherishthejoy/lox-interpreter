@@ -49,6 +49,18 @@ pub const Environment = struct {
         return RuntimeError.UndefinedVariable;
     }
 
+    pub fn getAt(self: *Self, distance: usize, name: []const u8) !Literal {
+        return self.ancestor(distance).values.get(name).?;
+    }
+
+    fn ancestor(self: *Self, distance: usize) *Environment {
+        var environment = self;
+        for (0..distance) |_| {
+            environment = environment.enclosing.?;
+        }
+        return environment;
+    }
+
     pub fn assign(self: *Self, name: Token, value: Literal) !void {
         if (self.values.contains(name.lexeme)) {
             try self.values.put(name.lexeme, value);
@@ -65,5 +77,9 @@ pub const Environment = struct {
         );
         runtimeError(name, message);
         return RuntimeError.UndefinedVariable;
+    }
+
+    pub fn assignAt(self: *Self, distance: usize, name: Token, value: Literal) !void {
+        try self.ancestor(distance).values.put(name.lexeme, value);
     }
 };

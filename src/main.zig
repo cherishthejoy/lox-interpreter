@@ -7,6 +7,7 @@ const Token = @import("Token.zig").Token;
 const Scanner = @import("Scanner.zig").Scanner;
 const Parser = @import("Parser.zig").Parser;
 const Interpreter = @import("Interpreter.zig").Interpreter;
+const Resolver = @import("Resolver.zig").Resolver;
 
 var input_buffer: [50]u8 = undefined;
 var stdin_reader = std.fs.File.stdin().reader(&input_buffer);
@@ -68,10 +69,16 @@ fn run(string: []const u8, allocator: Allocator) !void {
         return;
     };
 
+    if (had_error) return;
+
     var interpreter = try Interpreter.init(allocator);
-    try interpreter.interpret(statements);
+    var resolver = Resolver.init(&interpreter, allocator);
+
+    try resolver.resolveStmts(statements.items);
 
     if (had_error) return;
+
+    try interpreter.interpret(statements);
 }
 
 pub fn parseError(token: Token, message: []const u8) void {

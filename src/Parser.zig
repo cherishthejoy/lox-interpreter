@@ -21,6 +21,10 @@ pub const FunctionDecl = struct {
     body: []*Stmt,
 };
 
+pub const Block = struct {
+    statements: []*Stmt,
+};
+
 /// Expression
 ///   -> Equality (!=, ==)
 ///     -> Comparisson (>, >=, <, <=)

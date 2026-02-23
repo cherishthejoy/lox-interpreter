@@ -20,12 +20,15 @@ pub const Interpreter = struct {
     runtime_error: ?RuntimeErrorInfo = null,
     return_value: ?Literal = null,
 
+    locals: std.AutoHashMap(*const Expr, usize),
+
     pub fn init(allocator: std.mem.Allocator) !Self {
         const globals = try Environment.init(allocator);
         var self = Self{
             .allocator = allocator,
             .globals = globals,
             .environment = globals,
+            .locals = std.AutoHashMap(*const Expr, usize).init(allocator),
         };
 
         const clock = LoxCallable{
@@ -263,10 +266,19 @@ pub const Interpreter = struct {
                 return try self.evaluate(expr.logical.right);
             },
             .grouping => try self.evaluate(expr.grouping.expression),
-            .variable => try self.environment.get(expr.variable.name),
+            // .variable => try self.environment.get(expr.variable.name),
+            .variable => try self.lookupVariable(expr.variable.name, expr),
             .assign => {
                 const value = try self.evaluate(expr.assign.value);
-                try self.environment.assign(expr.assign.name, value);
+                // try self.environment.assign(expr.assign.name, value);
+
+                const distance = self.locals.get(expr);
+                if (distance) |d| {
+                    try self.environment.assignAt(d, expr.assign.name, value);
+                } else {
+                    try self.globals.assign(expr.assign.name, value);
+                }
+
                 return value;
             },
         };
@@ -280,6 +292,19 @@ pub const Interpreter = struct {
             .message = "Operands Must be numbers",
         };
         return RuntimeError.OperandsMustBeNumbers;
+    }
+
+    pub fn resolve(self: *Interpreter, expr: *const Expr, depth: usize) !void {
+        try self.locals.put(expr, depth);
+    }
+
+    fn lookupVariable(self: *Self, name: Token, expr: *const Expr) !Literal {
+        const distance = self.locals.get(expr);
+        if (distance) |d| {
+            return self.environment.getAt(d, name.lexeme);
+        } else {
+            return try self.globals.get(name);
+        }
     }
 };
 
