@@ -40,7 +40,7 @@ pub const LoxFunction = struct {
             else => return err,
         };
 
-        try interpreter.executeBlock(self.declaration.body, environment);
+        // try interpreter.executeBlock(self.declaration.body, environment);
         return .none;
     }
 
