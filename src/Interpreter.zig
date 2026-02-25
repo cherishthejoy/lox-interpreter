@@ -103,7 +103,15 @@ pub const Interpreter = struct {
                 var methods = std.StringHashMap(*LoxFunction).init(self.allocator);
                 for (stmt.class.methods) |*method| {
                     const new_func = try self.allocator.create(LoxFunction);
-                    new_func.* = LoxFunction.init(method, self.environment);
+                    new_func.* = LoxFunction.init(
+                        method,
+                        self.environment,
+                        std.mem.eql(
+                            u8,
+                            method.name.lexeme,
+                            "init",
+                        ),
+                    );
                     try methods.put(method.name.lexeme, new_func);
                 }
 
@@ -112,7 +120,7 @@ pub const Interpreter = struct {
             },
             .function => {
                 const new_function = try self.allocator.create(LoxFunction);
-                new_function.* = LoxFunction.init(&stmt.function, self.environment);
+                new_function.* = LoxFunction.init(&stmt.function, self.environment, false);
                 try self.environment.define(
                     stmt.function.name.lexeme,
                     Literal{
@@ -285,6 +293,7 @@ pub const Interpreter = struct {
                     },
                 }
             },
+            .this => return self.lookupVariable(expr.this.keyword, expr),
             .get => {
                 const object = try self.evaluate(expr.get.object);
                 switch (object) {

@@ -23,12 +23,10 @@ pub const LoxInstance = struct {
         if (self.fields.get(name.lexeme)) |found| {
             return found;
         }
+
         if (self.class.findMethod(name.lexeme)) |method| {
-            return Literal{
-                .callable = .{
-                    .function = method,
-                },
-            };
+            const bound = try method.bind(self);
+            return Literal{ .callable = .{ .function = bound } };
         }
 
         runtimeError(

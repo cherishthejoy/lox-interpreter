@@ -594,6 +594,12 @@ pub const Parser = struct {
             return self.literal(self.previous().literal);
         }
 
+        if (self.match(&[_]TokenType{.THIS})) {
+            const new_expr = try self.allocator.create(Expr);
+            new_expr.* = Expr{ .this = .{ .keyword = self.previous() } };
+            return new_expr;
+        }
+
         if (self.match(&[_]TokenType{.IDENTIFIER})) {
             const new_expr = try self.allocator.create(Expr);
             new_expr.* = Expr{ .variable = .{ .name = self.previous() } };
@@ -650,6 +656,7 @@ pub const Expr = union(enum) {
     binary: Binary,
     literal: Literal,
     caller: Caller,
+    this: This,
     get: Get,
     set: Set,
     logical: Logical,
@@ -696,6 +703,10 @@ const Caller = struct {
     callee: *const Expr,
     paren: Token,
     arguments: []*Expr,
+};
+
+const This = struct {
+    keyword: Token,
 };
 
 const Get = struct {

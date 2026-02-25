@@ -17,13 +17,20 @@ pub const LoxClass = struct {
 
     pub fn call(self: *Self, interpreter: *Interpreter, arguments: []Literal) !Literal {
         const new_instance = try interpreter.allocator.create(LoxInstance);
-        _ = arguments;
         new_instance.* = LoxInstance.init(self, interpreter.allocator);
+
+        if (self.findMethod("init")) |initializer| {
+            const bound = try initializer.bind(new_instance);
+            _ = try bound.call(interpreter, arguments);
+        }
+
         return Literal{ .instance = new_instance };
     }
 
     pub fn arity(self: *Self) usize {
-        _ = self;
+        if (self.findMethod("init")) |initializer| {
+            initializer.arity();
+        }
         return 0;
     }
 
