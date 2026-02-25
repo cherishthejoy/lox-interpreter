@@ -99,7 +99,15 @@ pub const Interpreter = struct {
             .class => {
                 try self.environment.define(stmt.class.name.lexeme, .none);
                 const new_class = try self.allocator.create(LoxClass);
-                new_class.* = LoxClass.init(stmt.class.name.lexeme);
+
+                var methods = std.StringHashMap(*LoxFunction).init(self.allocator);
+                for (stmt.class.methods) |*method| {
+                    const new_func = try self.allocator.create(LoxFunction);
+                    new_func.* = LoxFunction.init(method, self.environment);
+                    try methods.put(method.name.lexeme, new_func);
+                }
+
+                new_class.* = LoxClass.init(stmt.class.name.lexeme, methods);
                 try self.environment.assign(stmt.class.name, Literal{ .callable = .{ .class = new_class } });
             },
             .function => {
@@ -269,8 +277,41 @@ pub const Interpreter = struct {
                         }
                     },
                     else => {
-                        runtimeError(expr.caller.paren, "Can only call functions and classes");
+                        self.runtime_error = .{
+                            .token = expr.caller.paren,
+                            .message = "Can only call functions and classes",
+                        };
                         return RuntimeError.UndefinedVariable;
+                    },
+                }
+            },
+            .get => {
+                const object = try self.evaluate(expr.get.object);
+                switch (object) {
+                    .instance => |inst| return inst.get(expr.get.name),
+                    else => {
+                        self.runtime_error = .{
+                            .token = expr.get.name,
+                            .message = "Only instances have properties.",
+                        };
+                        return RuntimeError.NotInstance;
+                    },
+                }
+            },
+            .set => {
+                const object = try self.evaluate(expr.set.object);
+                switch (object) {
+                    .instance => |inst| {
+                        const value = try self.evaluate(expr.set.value);
+                        try inst.set(expr.set.name, value);
+                        return value;
+                    },
+                    else => {
+                        self.runtime_error = .{
+                            .token = expr.set.name,
+                            .message = "Only instances have fields.",
+                        };
+                        return RuntimeError.NotInstance;
                     },
                 }
             },
@@ -341,7 +382,9 @@ pub const RuntimeError = error{
     OperandsMustBeNumbersOrStrings,
     OutOfMemory,
     UndefinedVariable,
+    UndefinedProperty,
     Return,
+    NotInstance,
 };
 
 pub const RuntimeErrorInfo = struct {

@@ -3,15 +3,18 @@ const Interpreter = @import("Interpreter.zig").Interpreter;
 
 const Parser = @import("Parser.zig");
 const Token = @import("Token.zig").Token;
+const LoxFunction = @import("LoxFunction.zig").LoxFunction;
 
 const Stmt = Parser.Stmt;
 const Expr = Parser.Expr;
+const FunctionDecl = Parser.FunctionDecl;
 
 const parseError = @import("main.zig").parseError;
 
 const FunctionType = enum {
     NONE,
     FUNCTION,
+    METHOD,
 };
 
 pub const Resolver = struct {
@@ -46,6 +49,10 @@ pub const Resolver = struct {
             .class => {
                 try self.declare(statement.class.name);
                 try self.define(statement.class.name);
+
+                for (statement.class.methods) |method| {
+                    try self.resolveFunction(method, .METHOD);
+                }
             },
             .expression => {
                 try self.resolveExpr(statement.expression);
@@ -72,7 +79,7 @@ pub const Resolver = struct {
             .function => {
                 try self.declare(statement.function.name);
                 try self.define(statement.function.name);
-                try self.resolveFunction(statement, .FUNCTION);
+                try self.resolveFunction(statement.function, .FUNCTION);
             },
             .if_stmt => {
                 const i = &statement.if_stmt;
@@ -115,6 +122,13 @@ pub const Resolver = struct {
                 for (expr.caller.arguments) |arg| {
                     try self.resolveExpr(arg);
                 }
+            },
+            .get => {
+                try self.resolveExpr(expr.get.object);
+            },
+            .set => {
+                try self.resolveExpr(expr.set.value);
+                try self.resolveExpr(expr.set.object);
             },
             .grouping => {
                 try self.resolveExpr(expr.grouping.expression);
@@ -167,15 +181,15 @@ pub const Resolver = struct {
         }
     }
 
-    fn resolveFunction(self: *Self, stmt: *Stmt, f_type: FunctionType) !void {
+    fn resolveFunction(self: *Self, function: FunctionDecl, f_type: FunctionType) !void {
         const enclosing_function = self.current_function;
         self.current_function = f_type;
         try self.beginScope();
-        for (stmt.function.params) |param| {
+        for (function.params) |param| {
             try self.declare(param);
             try self.define(param);
         }
-        try self.resolveStmts(stmt.function.body);
+        try self.resolveStmts(function.body);
         self.endScope();
         self.current_function = enclosing_function;
     }

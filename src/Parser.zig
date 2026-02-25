@@ -186,12 +186,24 @@ pub const Parser = struct {
                     };
                     return new_expr;
                 },
+                .get => {
+                    const get = expr.get;
+                    const new_expr = try self.allocator.create(Expr);
+                    new_expr.* = Expr{
+                        .set = .{
+                            .object = get.object,
+                            .name = get.name,
+                            .value = value,
+                        },
+                    };
+                    return new_expr;
+                },
                 else => {
                     return returnError(equals, "Invalid assignment target.");
                 },
             }
 
-            returnError(equals, "Invalid assignment target.");
+            // returnError(equals, "Invalid assignment target.");
         }
         return expr;
     }
@@ -515,10 +527,21 @@ pub const Parser = struct {
         var expr = try self.primary();
 
         while (true) {
-            if (self.match(&[_]TokenType{.LEFT_PAREN}))
-                expr = try self.finishCall(expr)
-            else
+            if (self.match(&[_]TokenType{.LEFT_PAREN})) {
+                expr = try self.finishCall(expr);
+            } else if (self.match(&[_]TokenType{.DOT})) {
+                const name = try self.consume(.IDENTIFIER, "Expect property name after '.'.");
+                const new_expr = try self.allocator.create(Expr);
+                new_expr.* = Expr{
+                    .get = .{
+                        .object = expr,
+                        .name = name,
+                    },
+                };
+                expr = new_expr;
+            } else {
                 break;
+            }
         }
         return expr;
     }
@@ -627,6 +650,8 @@ pub const Expr = union(enum) {
     binary: Binary,
     literal: Literal,
     caller: Caller,
+    get: Get,
+    set: Set,
     logical: Logical,
     grouping: Grouping,
     unary: Unary,
@@ -671,6 +696,17 @@ const Caller = struct {
     callee: *const Expr,
     paren: Token,
     arguments: []*Expr,
+};
+
+const Get = struct {
+    object: *const Expr,
+    name: Token,
+};
+
+const Set = struct {
+    object: *const Expr,
+    name: Token,
+    value: *const Expr,
 };
 
 pub const Literal = union(enum) {
