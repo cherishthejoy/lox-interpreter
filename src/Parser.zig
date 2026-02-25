@@ -234,7 +234,7 @@ pub const Parser = struct {
         new_stmt.* = Stmt{
             .return_stmt = .{
                 .keyword = keyword,
-                .value = value.?,
+                .value = value,
             },
         };
 
