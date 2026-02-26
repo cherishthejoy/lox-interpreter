@@ -97,15 +97,51 @@ pub const Interpreter = struct {
                 return;
             },
             .class => {
-                try self.environment.define(stmt.class.name.lexeme, .none);
-                const new_class = try self.allocator.create(LoxClass);
+                var superclass: ?*LoxClass = null;
 
+                if (stmt.class.superclass) |super| {
+                    const result = try self.evaluate(super);
+
+                    const super_class: ?*LoxClass = switch (result) {
+                        .callable => |callable| switch (callable) {
+                            .class => callable.class,
+                            else => null,
+                        },
+                        .class => result.class,
+                        else => null,
+                    };
+
+                    if (super_class == null) {
+                        runtimeError(
+                            stmt.class.superclass.?.variable.name,
+                            "Superclass must be a class",
+                        );
+                    }
+                    superclass = super_class.?;
+                }
+
+                try self.environment.define(stmt.class.name.lexeme, .none);
+
+                var env = self.environment;
+
+                if (stmt.class.superclass != null) {
+                    env = try Environment.initEnclosing(
+                        self.allocator,
+                        self.environment,
+                    );
+
+                    try env.define("super", Literal{
+                        .callable = .{ .class = superclass.? },
+                    });
+                }
+
+                const new_class = try self.allocator.create(LoxClass);
                 var methods = std.StringHashMap(*LoxFunction).init(self.allocator);
                 for (stmt.class.methods) |*method| {
                     const new_func = try self.allocator.create(LoxFunction);
                     new_func.* = LoxFunction.init(
                         method,
-                        self.environment,
+                        env,
                         std.mem.eql(
                             u8,
                             method.name.lexeme,
@@ -115,8 +151,15 @@ pub const Interpreter = struct {
                     try methods.put(method.name.lexeme, new_func);
                 }
 
-                new_class.* = LoxClass.init(stmt.class.name.lexeme, methods);
-                try self.environment.assign(stmt.class.name, Literal{ .callable = .{ .class = new_class } });
+                new_class.* = LoxClass.init(stmt.class.name.lexeme, superclass, methods);
+
+                if (superclass != null) {
+                    self.environment = env.enclosing.?;
+                }
+
+                try self.environment.assign(stmt.class.name, Literal{
+                    .callable = .{ .class = new_class },
+                });
             },
             .function => {
                 const new_function = try self.allocator.create(LoxFunction);
@@ -323,6 +366,34 @@ pub const Interpreter = struct {
                         return RuntimeError.NotInstance;
                     },
                 }
+            },
+            .super => {
+                const distance = self.locals.get(expr).?;
+
+                const superclass_literal = try self.environment.getAt(distance, "super");
+                const superclass = superclass_literal.callable.class;
+
+                const this_literal = try self.environment.getAt(distance - 1, "this");
+                const object = this_literal.instance;
+
+                if (superclass.findMethod(expr.super.method.lexeme)) |method| {
+                    // return try method.bind(object);
+                    const bound = try method.bind(object);
+                    return Literal{ .callable = .{ .function = bound } };
+                }
+
+                const message = try std.fmt.allocPrint(
+                    self.allocator,
+                    "Undefined property '{s}'.",
+                    .{expr.super.method.lexeme},
+                );
+
+                runtimeError(
+                    expr.super.method,
+                    message,
+                );
+
+                return RuntimeError.UndefinedProperty;
             },
             .unary => {
                 const right = try self.evaluate(expr.unary.right);

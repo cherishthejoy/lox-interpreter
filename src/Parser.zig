@@ -27,6 +27,7 @@ pub const FunctionDecl = struct {
 pub const ClassDecl = struct {
     name: Token,
     methods: []FunctionDecl,
+    superclass: ?*Expr,
 };
 
 pub const Block = struct {
@@ -87,6 +88,15 @@ pub const Parser = struct {
 
     fn classDeclaration(self: *Self) !*Stmt {
         const name = try self.consume(.IDENTIFIER, "Expect class name.");
+
+        var superclass: ?*Expr = null;
+        if (self.match(&[_]TokenType{.LESS})) {
+            _ = try self.consume(.IDENTIFIER, "Expect superclass name.");
+            const new_expr = try self.allocator.create(Expr);
+            new_expr.* = Expr{ .variable = .{ .name = self.previous() } };
+            superclass = new_expr;
+        }
+
         _ = try self.consume(.LEFT_BRACE, "Expect '{' before class body.");
 
         var methods = std.ArrayList(FunctionDecl).empty;
@@ -103,6 +113,7 @@ pub const Parser = struct {
             .class = .{
                 .name = name,
                 .methods = try methods.toOwnedSlice(self.allocator),
+                .superclass = superclass,
             },
         };
         return new_stmt;
@@ -594,6 +605,15 @@ pub const Parser = struct {
             return self.literal(self.previous().literal);
         }
 
+        if (self.match(&[_]TokenType{.SUPER})) {
+            const keyword = self.previous();
+            _ = try self.consume(.DOT, "Expect '.' after 'super'");
+            const method = try self.consume(.IDENTIFIER, "Expect superclass method name.");
+            const new_expr = try self.allocator.create(Expr);
+            new_expr.* = Expr{ .super = .{ .keyword = keyword, .method = method } };
+            return new_expr;
+        }
+
         if (self.match(&[_]TokenType{.THIS})) {
             const new_expr = try self.allocator.create(Expr);
             new_expr.* = Expr{ .this = .{ .keyword = self.previous() } };
@@ -656,6 +676,7 @@ pub const Expr = union(enum) {
     binary: Binary,
     literal: Literal,
     caller: Caller,
+    super: Super,
     this: This,
     get: Get,
     set: Set,
@@ -705,6 +726,11 @@ const Caller = struct {
     arguments: []*Expr,
 };
 
+const Super = struct {
+    keyword: Token,
+    method: Token,
+};
+
 const This = struct {
     keyword: Token,
 };
@@ -745,7 +771,7 @@ const Unary = struct {
     right: *const Expr,
 };
 
-const Variable = struct {
+pub const Variable = struct {
     name: Token,
 };
 

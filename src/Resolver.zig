@@ -22,6 +22,7 @@ const FunctionType = enum {
 const ClassType = enum {
     NONE,
     CLASS,
+    SUBCLASS,
 };
 
 pub const Resolver = struct {
@@ -54,22 +55,38 @@ pub const Resolver = struct {
                 try self.resolveStmts(statement.block);
                 self.endScope();
             },
-            .class => {
+            .class => |class| {
                 const enclosing_class = self.current_class;
                 self.current_class = .CLASS;
 
-                try self.declare(statement.class.name);
-                try self.define(statement.class.name);
+                try self.declare(class.name);
+                try self.define(class.name);
+
+                if (class.superclass != null and std.mem.eql(u8, class.name.lexeme, class.superclass.?.variable.name.lexeme)) {
+                    runtimeError(class.superclass.?.variable.name, "A class can't inherit from itself.");
+                }
+
+                if (class.superclass) |superclass| {
+                    self.current_class = .SUBCLASS;
+                    try self.resolveExpr(superclass);
+                }
+
+                if (class.superclass != null) {
+                    try self.beginScope();
+                    try self.scopes.items[self.scopes.items.len - 1].put("super", true);
+                }
 
                 try self.beginScope();
                 try self.scopes.items[self.scopes.items.len - 1].put("this", true);
 
-                for (statement.class.methods) |method| {
+                for (class.methods) |method| {
                     var declaration: FunctionType = .METHOD;
                     if (std.mem.eql(u8, method.name.lexeme, "init")) declaration = .INITIALIZER;
                     try self.resolveFunction(method, declaration);
                 }
                 self.endScope();
+
+                if (class.superclass != null) self.endScope();
 
                 self.current_class = enclosing_class;
             },
@@ -164,6 +181,20 @@ pub const Resolver = struct {
             .set => {
                 try self.resolveExpr(expr.set.value);
                 try self.resolveExpr(expr.set.object);
+            },
+            .super => {
+                if (self.current_class == .NONE) {
+                    runtimeError(
+                        expr.super.keyword,
+                        "Can't use 'super' outside of a class.",
+                    );
+                } else if (self.current_class != .SUBCLASS) {
+                    runtimeError(
+                        expr.super.keyword,
+                        "Can't use 'super' in a class with no superclass.",
+                    );
+                }
+                try self.resolveLocal(expr, expr.super.keyword);
             },
             .grouping => {
                 try self.resolveExpr(expr.grouping.expression);

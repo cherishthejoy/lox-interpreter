@@ -3,16 +3,22 @@ const std = @import("std");
 const Interpreter = @import("Interpreter.zig").Interpreter;
 const LoxInstance = @import("LoxInstance.zig").LoxInstance;
 const LoxFunction = @import("LoxFunction.zig").LoxFunction;
+
 const Parser = @import("Parser.zig");
 const Literal = Parser.Literal;
 
 pub const LoxClass = struct {
     const Self = @This();
+    superclass: ?*LoxClass,
     name: []const u8,
     methods: std.StringHashMap(*LoxFunction),
 
-    pub fn init(name: []const u8, methods: std.StringHashMap(*LoxFunction)) Self {
-        return .{ .name = name, .methods = methods };
+    pub fn init(name: []const u8, superclass: ?*LoxClass, methods: std.StringHashMap(*LoxFunction)) Self {
+        return .{
+            .name = name,
+            .superclass = superclass,
+            .methods = methods,
+        };
     }
 
     pub fn call(self: *Self, interpreter: *Interpreter, arguments: []Literal) !Literal {
@@ -37,6 +43,10 @@ pub const LoxClass = struct {
     pub fn findMethod(self: *Self, name: []const u8) ?*LoxFunction {
         if (self.methods.contains(name)) {
             return self.methods.get(name).?;
+        }
+
+        if (self.superclass) |class| {
+            return class.findMethod(name);
         }
         return null;
     }
